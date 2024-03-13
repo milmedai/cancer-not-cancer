@@ -110,12 +110,16 @@ export default {
         editTask(task) {
             this.taskToEdit = task
         },
-        finishTaskEdit(auxData) {
+        finishTaskEdit(auxData, close = true) {
             const index = this.taskData.findIndex(task => task.id == this.taskToEdit.id)
-            this.taskData[index].observer_count = auxData.observers
-            this.taskData[index].image_count = auxData.images
+            if (auxData.observers !== null)
+                this.taskData[index].observer_count = auxData.observers
+            if (auxData.images !== null)
+                this.taskData[index].image_count = auxData.images
             this.updateTaskProgress(index)
-            this.taskToEdit = null
+            if (close) {
+                this.taskToEdit = null
+            }
         },
         async deleteTask(task) {
             try {

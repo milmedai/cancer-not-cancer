@@ -64,6 +64,7 @@ const fileTools = useFileTools()
 const Adder = resolveComponent('Adder')
 const ImagePicker = resolveComponent('ImagePicker')
 const RoiSettings = resolveComponent('RoiSettings')
+const ContentEditor = resolveComponent('ContentEditor')
 
 export default {
     props: ['task'],
@@ -83,6 +84,7 @@ export default {
                 type: 'tag',
                 selected: [],
             },
+            annotationGuide: ''
         }
     },
     computed: {
@@ -113,22 +115,33 @@ export default {
                     props: { chipSize, fovSize, zoomScale },
                     events: { update: this.updateRoi }
 
+                },
+                {
+                    name: 'guide',
+                    label: "Annotation Guide",
+                    component: ContentEditor,
+                    props: { initialContent: this.annotationGuide },
+                    events: { update: this.updateGuide }
+
                 }
             ]
         }
     },
     async mounted() {
         try {
-            const [observersData, imagesData] = await Promise.all([
+            const [observersData, imagesData, guideData] = await Promise.all([
                 api.GET('/tasks/observers', {
                     task_id: this.task.id
                 }),
                 api.GET('/tasks/images', {
                     task_id: this.task.id
-                })
+                }),
+                api.GET(`/tasks/${this.task.id}/guide`)
             ])
             const observers = observersData.response.value
             const images = imagesData.response.value
+            const guideContent = guideData.response.value
+
             for (const user of observers) {
                 if (user.applied) {
                     this.observers.applied.push(user)
@@ -137,7 +150,9 @@ export default {
                 }
             }
             
+            // TODO: this can be done above
             this.root.contents = images
+            this.annotationGuide = guideContent
         } catch (error) {
             console.error(error)
         }
@@ -147,7 +162,7 @@ export default {
             try {
                 const selectedImages = fileTools.getSelectedFiles(this.root)
 
-                await Promise.all([
+                const results = await Promise.allSettled([
                     api.POST('/tasks/update', {
                         id: this.localTask.id,
                         short_name: this.localTask.short_name,
@@ -163,20 +178,35 @@ export default {
                     api.POST('/tasks/images', {
                         task_id: this.localTask.id,
                         imageIds: JSON.stringify(selectedImages),
+                    }),
+                    api.POST(`/tasks/${this.localTask.id}/guide`, {
+                        content: this.annotationGuide
                     })
                 ])
+                // TODO: clean up results logic
+                if (results[0].status === "fulfilled") {
+                    this.task.short_name = this.localTask.short_name
+                    this.task.prompt = this.localTask.prompt
+                    this.task.chip_size = this.localTask.chip_size
+                    this.task.fov_size = this.localTask.fov_size
+                    this.task.zoom_scale = this.localTask.zoom_scale
+                } else {
+                    console.error("There was an error saving the task data.")
+                }
 
-                this.task.short_name = this.localTask.short_name
-                this.task.prompt = this.localTask.prompt
-                this.task.chip_size = this.localTask.chip_size
-                this.task.fov_size = this.localTask.fov_size
-                this.task.zoom_scale = this.localTask.zoom_scale
+                const closeIfNoErrors = results.every((res) => (res.status === "fulfilled"))
 
                 // Emit save event to update stats in task table.
                 this.$emit('save', {
-                    observers: this.observers.applied.length,
-                    images: selectedImages.length
-                })
+                    observers: results[1].status === "fulfilled" ? this.observers.applied.length : null,
+                    images: results[2].status === "fulfilled" ? selectedImages.length : null
+                }, closeIfNoErrors)
+
+                if (!closeIfNoErrors) {
+                    // TODO: turn this into a notification
+                    console.warn("Not all content was saved. To preserve current unsaved changes, the task editor has not been closed.")
+                }
+
             } catch (err) {
                 console.error(err)
             }
@@ -193,6 +223,9 @@ export default {
             this.localTask.chip_size = roiData.chipSize
             this.localTask.fov_size = roiData.fovSize
             this.localTask.zoom_scale = roiData.zoomScale
+        },
+        updateGuide(guideContent) {
+            this.annotationGuide = guideContent
         },
         report() {
             console.log('Files selected')

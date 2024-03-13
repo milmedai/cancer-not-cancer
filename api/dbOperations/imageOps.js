@@ -65,6 +65,87 @@ const imageOps = {
         return rows.map(row => row.image_id)
     },
 
+    async getImageQueue(userId, taskId) {
+        const limit = 25
+        const query = `
+            WITH
+                HotOrNotQuick AS (
+                    SELECT hotornot.image_id as image_id
+                    FROM hotornot
+                    WHERE
+                    user_id = ?
+                    AND task_id = ?
+                )
+                SELECT
+                    images.id as image_id,
+                    images.path as imageUrl,
+                    images.original_name as name
+                FROM task_images
+                LEFT JOIN images ON task_images.image_id = images.id
+                WHERE
+                    task_images.task_id = ?
+                    AND task_images.image_id NOT IN(SELECT image_id FROM HotOrNotQuick)
+                LIMIT ?`
+
+        const rows = await dbOps.select(query, [userId, taskId, taskId, limit])
+        return rows
+    },
+
+    async retrieveExistingFolders(user_id, parentFolderName) {
+        const getFolderStructureChildToParent = `
+            WITH RECURSIVE rel as (
+                SELECT tags.id, tags.name, tags.user_id, tag_relations.parent_tag_id as parent_id
+                FROM tags
+                LEFT JOIN tag_relations on tags.id = tag_relations.tag_id
+                WHERE tags.name = ? AND tags.user_id = ?
+                    UNION ALL
+                SELECT t.id, t.name, t.user_id, tr.parent_tag_id as parent_id
+                FROM tags t
+                LEFT JOIN tag_relations tr ON tr.tag_id = t.id
+                INNER JOIN rel ON tr.parent_tag_id = rel.id
+            )
+            SELECT * from rel`
+
+        // raw tag/folder structure [{id, name, user_id, parent_id}]
+        const rows = await dbOps.select(getFolderStructureChildToParent, [parentFolderName, user_id])
+
+        // map for direct access to each tag/folder
+        const folderMap = rows.reduce((fMap, row) => {
+            fMap[row.id] = { ...row, children: [] }
+            return fMap
+        }, {})
+
+        // organize folders into a tree
+        let root = null
+        rows.forEach(row => {
+            if (row.parent_id !== null) {
+                folderMap[row.parent_id].children.push(folderMap[row.id])
+            } else {
+                // root found
+                root = folderMap[row.id]
+            }
+        })
+
+        // recusive builds the paths for all the decending nodes
+        function buildPaths(node, currentPath = '') {
+            if (!node) return
+            const path = `${currentPath}/${node.name}`.replace(/^\//, '') // remove leading slash
+            foundFolders[path] = {
+                name: path,
+                id: node.id,
+                parentFolderName: currentPath
+            }
+            node.children.forEach(child => buildPaths(child, path))
+        }
+
+        const foundFolders = {}
+        if (root) {
+            buildPaths(root)
+        }
+
+        return foundFolders
+
+    },
     /**
      * Translates an array or set of folder paths into tag and creates tag relations accordingly.
      * 

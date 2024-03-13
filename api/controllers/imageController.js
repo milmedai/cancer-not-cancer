@@ -1,12 +1,13 @@
 import { Router } from 'express'
 import imageOps from '../dbOperations/imageOps.js'
 import tagOps from '../dbOperations/tagOps.js'
-import { uploadImages, removeFile, removeEmptyImageFolders } from '../lib/upload.js' // middleware to handle uploads
+import { isMultipart, uploadImages, uploadAnnotationImages, removeFile, removeEmptyImageFolders } from '../lib/upload.js' // middleware to handle uploads
 import { getIP, virtualFileSystem as VFS, asyncHandler } from '../lib/functions.js' // Helper functions
 
 import * as path from 'path'
 
 const imageBaseURL = process.env.IMAGE_URL
+const annotationImageFolderName = 'Annotation Guides'
 
 const folderQueue = {}
 
@@ -41,21 +42,44 @@ const imageController = {
         const data = await imageOps.getNextImageIds(userId, taskId)
         res.send(data)
     },
+
+    async getImageQueue(req, res, next) {
+        let taskId = req.params.taskId
+        let userId = req.user.id
+        const data = await imageOps.getImageQueue(userId, taskId)
+        const imageQueue = data.map(row => { return {...row, imageUrl: new URL(row.imageUrl, imageBaseURL).href}})
+
+        res.send(imageQueue)
+    },
     
+    async setSlideMasterFolder(req, res, next) {
+        const date = new Date(req.headers.uploadtime)
+        const masterFolderName = `${date.toISOString().split('.')[0].replace('T', ' ')} Upload`
+        req.masterFolderName = masterFolderName
+        next()
+    },
+
+    async setAnnotationsMasterFolder(req, res, next) {
+        req.masterFolderName = annotationImageFolderName
+        next()
+    },
+
     /** Save successfull image uploads with the uploaders ip */
     async saveUploadsToDb(req, res, next) {
         // TODO: this has no error handling if the req has ended... will cause getIP to throw an error.
         const ip = getIP(req)
-        const date = new Date(req.headers.uploadtime)
-        const masterFolderName = `${date.toISOString().split('.')[0].replace('T', ' ')} Upload`
-        // const masterFolderName = `${req.user.id}_${req.headers.uploadtime}`
+        const masterFolderName = req.masterFolderName
 
-        const folderKey = `${req.user.id}_masterFolderName`
+        const folderKey = `${req.user.id}_${masterFolderName}`
         const folderStructure = VFS.createFolderStructure(req.files, masterFolderName)
-
         
         try {
             let existingFolders = folderQueue[folderKey] || {}
+
+            if (masterFolderName == annotationImageFolderName && Object.keys(existingFolders).length === 0) {
+                // attempt to find folder/tags
+                existingFolders = await imageOps.retrieveExistingFolders(req.user.id, annotationImageFolderName)
+            }
 
             // create additional folders here
             const folders = await imageOps.saveFolderStructure(folderStructure, req.user.id, existingFolders)
@@ -143,7 +167,7 @@ const imageController = {
         if (req.files.length === 0) {
             res.status(200).send('No files uploaded.')
         } else {
-            const allowedKeys = ["filename", "mimeType", "id", "relPath", "success", "message"]    
+            const allowedKeys = ["filename", "mimeType", "id", "relPath", "imageUrl", "success", "message"]    
             const resultData = req.files.map((file) => {
                 const filteredFile = Object.keys(file)
                 .filter(key => allowedKeys.includes(key))
@@ -272,7 +296,19 @@ const imageController = {
 // Join all the middleware pieces need for uploading images.
 // This list is order specific.
 imageController.uploadAndSaveImages = Router().use([
+    asyncHandler(isMultipart),
     asyncHandler(uploadImages),
+    asyncHandler(imageController.setSlideMasterFolder),
+    asyncHandler(imageController.saveUploadsToDb),
+    asyncHandler(imageController.removeFailedImageSaves),
+    asyncHandler(imageController.saveImages)
+])
+
+// This list is order specific.
+imageController.uploadAndSaveAnnotationImages = Router().use([
+    asyncHandler(isMultipart),
+    asyncHandler(uploadAnnotationImages),
+    asyncHandler(imageController.setAnnotationsMasterFolder),
     asyncHandler(imageController.saveUploadsToDb),
     asyncHandler(imageController.removeFailedImageSaves),
     asyncHandler(imageController.saveImages)

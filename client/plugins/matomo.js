@@ -1,14 +1,17 @@
-import VuewMatomo from 'vue-matomo'
+import VueMatomo from 'vue-matomo'
 import { defineNuxtPlugin } from 'nuxt/app'
 
-// ['nuxt-matomo', { matomoUrl: 'https://client.milmed.ai/b/', siteId: 1, trackerUrl: 'https://client.milmed.ai/b/js/', scriptUrl: 'https://client.milmed.ai/b/js/', cookies: false }],
+// ['nuxt-matomo', { matomoUrl: hostUrl, siteId: 1, trackerUrl: scriptUrl, scriptUrl: scriptUrl, cookies: false }],
 
 export default defineNuxtPlugin((nuxtApp) => {
-    nuxtApp.vueApp.use(VuewMatomo, {
-        host: 'https://client.milmed.ai/b/',
+    const config = useRuntimeConfig()
+    const hostUrl = config.public.matomoUrl
+    const scriptUrl = new URL('js/', hostUrl).href
+    nuxtApp.vueApp.use(VueMatomo, {
+        host: hostUrl,
         siteId: 1,
-        trackerUrl: 'https://client.milmed.ai/b/js/',
-        trackerScriptUrl: 'https://client.milmed.ai/b/js/',
+        trackerUrl: scriptUrl,
+        trackerScriptUrl: scriptUrl,
 
         // Enables automatically registering pageviews on the router
         router: nuxtApp.$router,

@@ -42,9 +42,10 @@ import dataRoutes from './routes/data.js'
  * These are vital for their respective areas
  ******************/
 
-// JSON body structure
+// JSON body structure, default limit is 100kb
 app.use(bodyParser.json({
-    type: 'application/json'
+    type: 'application/json',
+    // limit: '10mb'
 }));
 
 // Server images if using local development

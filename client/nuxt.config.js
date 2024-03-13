@@ -5,6 +5,9 @@ import { defineNuxtConfig } from "nuxt/config"
  * work at the same url as production.
  */
 const base = new URL(process.env.PUBLIC_PATH).pathname
+const matomoNoscriptUrl = new URL('js/', process.env.ANALYTICS_URL)
+matomoNoscriptUrl.searchParams.set('idsite', 1)
+matomoNoscriptUrl.searchParams.set('rec', 1)
 
 export default defineNuxtConfig({
   /** 
@@ -44,7 +47,7 @@ export default defineNuxtConfig({
        * The noscript is setup for matomo. Nuxt2's __dangerouslyDisableSanitizers doesn't exist anymore.
        */
       noscript: [{
-        innerHTML: "\<img src=\"https://client.milmed.ai/b/js/?idsite=1&amp;rec=1\" style=\"border: 0\" alt=\"\" />"
+        innerHTML: `<img src="${matomoNoscriptUrl.href}" style="border: 0" alt="" />`
       }],
     },
   },
@@ -58,6 +61,7 @@ export default defineNuxtConfig({
     public: {
       uploadSizeLimit: process.env.UPLOAD_SIZE_LIMIT,
       apiUrl: process.env.API_URL,
+      matomoUrl: process.env.ANALYTICS_URL,
     }
   },
 
@@ -84,7 +88,7 @@ export default defineNuxtConfig({
   plugins: [
     '~/plugins/error-handler.js',
     '~/plugins/draggable.js',
-    { src: '~/plugins/matomo.js', ssr: false },
+    ...(process.env.NODE_ENV === 'production' ? [{ src: '~/plugins/matomo.js', mode: 'client' }] : []),
   ],
 
   /**
@@ -116,7 +120,7 @@ export default defineNuxtConfig({
    * staging or production you should uncomment them.
    */
   // sourcemap: true,
-  // devtools: { enabled: true }
+  devtools: { enabled: false }
   // debug: true
 
 })

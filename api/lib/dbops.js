@@ -91,7 +91,7 @@ class DatabaseOps {
      * Process select queries that return rows as results.
      * @param {string} sql Sql string template - 'Select * From tbl Where id=?'
      * @param {Array.<*>} values Values to populate sql template
-     * @returns {Array.<Object>} Returns an array of json result objects. Keys =
+     * @returns {Promise<Array.<Object>>} Returns an array of json result objects. Keys =
      * table column names.
      */
     async select(sql, values) {

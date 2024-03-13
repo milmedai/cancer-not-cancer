@@ -2,44 +2,38 @@
     <div class='app' :style='cssVars'>
         <div class="bg no" :class="{'fade-out': transitioningOut}"></div>
         <div class="bg yes" :class="{'fade-out': transitioningOut}"></div>
-        <!-- Grade bars for clear user response -->
-        <!-- <span class='grade-bar no' :class="{ 'shown': moveLeft }" :style='cssVars'></span>
-        <span class='grade-bar yes' :class="{ 'shown': moveRight }" :style='cssVars'></span> -->
 
         <!-- Image to grade -->
         <div class='prompt'>
-            <div class='controls level'>
-                <div class='task-picker level-left'>
-                    <!-- <strong>Task:</strong> -->
-                    <div class="select is-normal">
-                        <select v-model="selectedTask">
-                            <option v-for="task in tasks" :value="task.id">{{ task.prompt }}</option>
-                        </select>
-                    </div>
-                </div>
+            <div class='controls is-flex mb-5'>
+                <TaskPicker class="is-flex-grow-1" @taskSelected="(newTaskId) => { currentTaskId = newTaskId }"></TaskPicker>
+                <button class="button is-flex-shrink-1 is-warning is-light" type="button" @click="showAnnotationGuide">
+                    <span class="icon">
+                        <fa-icon :icon="['fa', 'question']" />
+                    </span>
+                </button>
             </div>
-            <div class="has-text-danger" v-if="!this.image.id">No more images available in this task.</div>
-            <div v-if="this.image.id" class="image-container" @click="zoom=!zoom">
-                <transition
-                    name="swap-img"
-                    @after-leave="afterLeave"
-                    @before-leave="beforeLeave"
-                    appear
-                >
-                    <div v-if="showImage" class="zoom-box" :class="{'zoom': zoom }">
-                        <div class='roi' :class="{ 'is-hidden': showRoiBox }"></div>
-                        <img :src='this.image.url' :alt='image.url'/>
-                    </div>
-                </transition>
-            </div>
-            <div class='controls level'>
+            <div class="has-text-danger" v-if="noMoreImages">No more images available in this task.</div>
+
+            <ImageSwipe @swipe-move="updatePercent" @swipe-end="swipeEnd" :disabled="disableSwipe">
+                <ImageDisplay
+                    v-if="!noMoreImages"
+                    :imageUrl="onDeck?.imageUrl"
+                    :altText="onDeck?.name"
+                    :chipSize="onDeck?.chipSize"
+                    :fovSize="onDeck?.fovSize"
+                    :zoomScale="onDeck?.zoomScale"
+                />
+            </ImageSwipe>  
+
+            <div v-if='onDeck' class='controls level'>
                 <p class="help is-hidden-desktop">Tap to zoom.</p>
                 <p class="help is-hidden-touch">Click to zoom.</p>
             </div>
         </div>
         
         <!-- Response section: grade + comment --> 
-        <div v-if="this.image.id" class='response-area'>
+        <div v-if="!noMoreImages" class='response-area'>
             <div class="has-text-centered swipe-pad" :class="{ 'shown': !commenting }">
                 <span class='icon swipe left'>
                     <img src="~assets/icons/arrow-set.svg" alt="swipe left">
@@ -51,9 +45,9 @@
 
             <!-- Grade buttons -->
             <div class='block grade-buttons'>
-                <button class='button no' :class="{ 'shown': moveLeft }" @click="onClick('no-cancer')">No</button>
-                <button class='button maybe' @click="onClick('maybe-cancer')">Maybe</button>
-                <button class='button yes' :class="{ 'shown': moveRight }" @click="onClick('yes-cancer')">Yes</button>
+                <button class='button no' :class="{ 'shown': moveLeft }" @click="onClick('no')">No</button>
+                <button class='button maybe' @click="onClick('maybe')">Maybe</button>
+                <button class='button yes' :class="{ 'shown': moveRight }" @click="onClick('yes')">Yes</button>
             </div>
 
             <!-- Comment -->
@@ -67,6 +61,8 @@
             </div>
 
         </div>
+
+        <AnnotationGuide v-if="showGuide" @exit="showGuide = !showGuide" :task-id="currentTaskId"/>
     </div>
 </template>
 
@@ -74,114 +70,57 @@
 import { mapState } from 'pinia'
 import { useUserStore } from '~/store/user'
 const api = useApi()
+const imageQueue = useImageQueue(1)
 
 const IMAGE_TRANSITION_TIME = 250 // ms
-
+// const IMAGE_TRANSITION_TIME = 2000 // ms
 export default {
     data() {
         return {
             // Information to display and grade the current image
-            image: {},
             onDeck: null,
-            queue: null,
-            selectedTask: null,
-            currentTask: null,
+            queue: imageQueue,
+            currentTaskId: null,
             tasks: [],
+            noMoreImages: false,
+            showGuide: false,
 
             // State information
             rating: '',
             comment: '',
             commenting: false,
-            zoom: false,
-            showImage: true,
             transitioningOut: false,
 
             // For swiping
-            xDown: null,
-            yDown: null,
-            xMove: null,
-            yMove: null,
-            touchEvent: null,
             moveRight: false,
             moveLeft: false,
             percent: 0.0,
-            innerWidth: window.innerWidth,
-            swipeDistance: 100
         }
     },
     async mounted() {
-        // move fetch() here
         if (this.isLoggedIn) {
             const { response } = await api.GET('/tasks/')
-            this.tasks = response.value // because response is a ref object
-            this.selectedTask = this.tasks[0].id
-            this.currentTask = this.tasks[0]
+            this.tasks = response.value
+            this.currentTaskId = this.tasks[0].id
         }
-
-        // Fixes a firefox swipe conflict. When swiping if the reload page
-        // swipe starts to engage, other animations freeze and hang. The
-        // following line deactivates swiping to reload page.
-        document.documentElement.style.setProperty('--overscroll', 'none')
-        // Turn scrolling off
-        document.documentElement.style.setProperty('--overflow', 'hidden')
-
-        this.nextImage()
-        
-        // Required for touches
-        document.addEventListener('touchstart', this.handleTouchStart, false)
-        document.addEventListener('touchmove', this.handleTouchMove, false)
-        document.addEventListener('touchend', this.handleTouchEnd, false)
     },
     
-    unmounted() {
-        // Reactivates swipe to reload (deactivated in the mount method)
-        document.documentElement.style.setProperty('--overscroll', 'auto')
-        // Allowing scrolling
-        document.documentElement.style.setProperty('--overflow', 'initial')
-
-        // We need to cleanup our event listeners. So we don't have duplicates when we return.
-        document.removeEventListener('touchstart', this.handleTouchStart, false)
-        document.removeEventListener('touchmove', this.handleTouchMove, false)
-        document.removeEventListener('touchend', this.handleTouchEnd, false)
-    },
 
     computed: {
         ...mapState(useUserStore, ['isLoggedIn', 'isPathologist']),
-        roiRatio() {
-            let roiRatio = 128/911 // default
-
-            if (this.currentTask !== null && this.currentTask.chip_size) {
-                // roiRatio assigned to task
-                roiRatio = this.currentTask.chip_size/ this.currentTask.fov_size
-            }
-
-            return roiRatio
-        },
-        zoomScale() {
-            let zoomScale = 4 // 4x default
-
-            if (this.currentTask !== null && this.currentTask.zoom_scale) {
-                // zoom_scale assigned to task
-                zoomScale = this.currentTask.zoom_scale
-            }
-
-            return zoomScale
-        },
-        showRoiBox() {
-            return !((this.currentTask === null) || (this.currentTask.chip_size !== 0))
-        },
         // give the attribute `:style='cssVars'` to anything that should have access to these variables
+        currentTask() {
+            return this.tasks.find((task) => task.id === this.currentTaskId)
+        },
         cssVars() {
             return {
-                '--x-diff': (this.xMove !== null ? this.xMove - this.xDown : 0) + 'px',
-                '--y-diff': (this.xMove !== null ? Math.abs(this.xMove - this.xDown) * -1 : 0) + 'px',
-                '--rot-diff': (this.percent),
-                '--bg-no-opacity': (this.percent > 0 ? this.percent : 0),
-                '--bg-yes-opacity': (this.percent < 0 ? this.percent*-1.0 : 0),
-                '--img-trans': IMAGE_TRANSITION_TIME + 'ms',
-                '--roi-ratio': this.roiRatio,
-                '--zoom-scale': this.zoomScale
+                '--bg-no-opacity': (this.percent < 0 ? this.percent*-1.0 : 0),
+                '--bg-yes-opacity': (this.percent > 0 ? this.percent*1.0 : 0),
+                '--img-trans': IMAGE_TRANSITION_TIME + 'ms'
             }
+        },
+        disableSwipe() {
+            return !this.onDeck || this.showGuide
         }
     },
     watch: {
@@ -191,288 +130,151 @@ export default {
                     // Previously not logged in, and now logged in.
                     const { response } = await api.GET('/tasks/')
                     this.tasks = response.value // because response is a ref object
-                    this.selectedTask = this.tasks[0].id
-                    this.currentTask = this.tasks[0]
-                    this.nextImage()
+                    this.currentTaskId = this.tasks[0].id
 
                 }
             }
         },
-        selectedTask: {
+        currentTaskId: {
             handler(newTaskId) {
-                this.queue = null
-                this.currentTask = this.tasks.find((task) => task.id === newTaskId)
-                this.nextImage()
+                this.queue.reset()
+                this.noMoreImages = false
+                this.getNewQueue()
+            }
+        },
+        onDeck: {
+            async handler(newValue, oldValue) {
+                if (newValue === null && oldValue !== null) {
+                    // end of queue... get more images if possible
+                    this.getNewQueue()
+                }
             }
         }
     },
     methods: {
-        /**********************************************
-        * App Control
-        **********************************************/
-        // when a button is clicked
-        onClick(source) {
-            // determine the message based on source
-            if (source === 'yes-cancer') {
-                this.rating = 1
-            } else if (source === 'no-cancer') {
-                this.rating = -1
-            } else if (source === 'maybe-cancer') {
-                this.rating = 0
-            }
-
-            // Begin Image swap
-            this.showImage = false
-
-            // record the response
-            this.postData({
-                id: this.image.id,
-                rating: this.rating,
-                comment: this.comment,
-                taskId: this.selectedTask,
-            }).then((res) => {
-
-                // move on to the next image
-                this.nextImage()
-            }).catch((error) => {
-                console.error(error)
-            })
-
-            /* reset */
-            this.comment = ''
-            this.commenting = false
-
-        },
-
-        async postData(bodyData) {
-            // POST with axios
+        async getNewQueue() {
             try {
-                // api
-                await api.POST('/hotornot', bodyData)
-            } catch(error) {
-                console.error(error)
-            }
-        },
+                const { response } = await api.GET(`/images/task/${this.currentTaskId}`)
+                if (response.value.length === 0) {
+                    this.noMoreImages = true
+                } else {
+                    const imageArray = response.value.map(imgData => {
+                        return {
+                            ...imgData,
+                            'chipSize': this.currentTask.chip_size,
+                            'fovSize': this.currentTask.fov_size,
+                            'zoomScale': this.currentTask.zoom_scale,
+                        }
+                    })
 
-        async getImageQueue() {
-            try {
-                const { response } = await api.GET('/images/queue', {
-                    taskId: this.selectedTask
-                })
-                this.queue = response.value
+                    // shuffle the images
+                    shuffleArray(imageArray)
+                    this.queue.addImages(imageArray)
+                    this.onDeck = this.queue.getNextImage()
+                }
             } catch (error) {
                 console.error(error)
             }
         },
-
-        getNextImageId() {
-            const nextImageIndex = Math.floor(Math.random() * this.queue.length)
-            const nextImageId = this.queue[nextImageIndex]
-            this.queue.splice(nextImageIndex, 1)
-
-            return nextImageId
+        updatePercent(newPercent) {
+            this.percent = newPercent
+            
+            if (this.percent >= 1) {
+                this.moveLeft = false
+                this.moveRight = true
+            } else if (this.percent <= -1) {
+                this.moveLeft = true
+                this.moveRight = false
+            } else {
+                this.moveLeft = false
+                this.moveRight = false
+            }
         },
 
-        async nextImage() { 
-            if (this.selectedTask == null) {
+        swipeEnd(direction) {
+            if (direction === 'right') {
+                this.onClick('yes')
+            } else if (direction === 'left') {
+                this.onClick('no')
+            } else if (direction === 'up') {
+                this.commenting = true
+            } else if (direction === 'down') {
+                this.commenting = false
+            }
+        },
+        /**********************************************
+        * App Control
+        **********************************************/
+        // when a button is clicked
+        async onClick(source) {
+            // determine the message based on source
+            if (source === 'yes') {
+                this.rating = 1
+            } else if (source === 'no') {
+                this.rating = -1
+            } else if (source === 'maybe') {
+                this.rating = 0
+            } else {
                 return
             }
 
-            if (this.isPathologist) {
-                // try-catch is needed for async/await
-                try {
-                    if (this.queue == null) {
-                        await this.getImageQueue()
-                    }
-                    
-                    // if the image queue is empty, do not proceed
-                    if (this.queue && !this.queue.length) {
-                        // TODO: handle the last image more gracefully with transitions.
-                        this.image = {} // reset main image
-                        return
-                    }
+            this.onDeck.rating = this.rating
+            
+            // record the response
+            try {
+                // save important data
+                const ratingImageId = this.onDeck.image_id
+                const comment = this.comment
 
-                    const nextImageId = this.getNextImageId()
+                // move on to the next image, and reset comment box
+                this.onDeck = this.queue.getNextImage()
+                this.comment = ''
+                this.commenting = false
 
-                    const { response } = await api.GET('/images/', {
-                        imageId: nextImageId,
-                    })
-                    // We preload the image asynchronously allowing for smooth
-                    // fade in and out between images. The image is loaded
-                    // outside the DOM, but that data will be cached for the
-                    // actually image load.
-                    var preloadImage = new Image()
-                    preloadImage.onload = () => {
-                        this.onDeck = response.value
-                        this.updateImage()
-                    }
-                    preloadImage.src = response.value.url
-                    
-                } catch (error) {
-                    console.error(error);
-                }
-            } else {
-                console.log('Not a pathologist or not logged in.')
+                // record important data, this POST is async, but making the
+                // request happen after the image swapping after seeing weird
+                // hiccups with image loading during development
+                api.POST('/hotornot', {
+                    id: ratingImageId,
+                    rating: this.rating,
+                    comment: this.comment,
+                    taskId: this.currentTaskId
+                })
+                
+            } catch (error) {
+                console.error(error)
             }
+
         },
 
-        // Called at the end of image transition out and upon completion of 
-        // image preloading. If both are complete we can move ahead with
-        // updating the image element.
-        updateImage() {
-            if (!this.transitioningOut && this.onDeck) {
-                this.image = this.onDeck
-                this.onDeck = null
-                this.zoom = false
-                this.showImage = true
-            }
+        async showAnnotationGuide() {
+            
+            this.showGuide = true
         },
 
         // After the image fully transitions out. 
         afterLeave() {
+            console.log('after leave')
             // reset img props here
             this.resetImagePos()
             this.transitioningOut = false
-            this.updateImage()
         },
         // Before the image starts transitioning out.
         beforeLeave() {
+            console.log('before leave')
             this.transitioningOut = true
-        },
-
-        /*************************************************************
-        * Swipes
-        * Modified from https://stackoverflow.com/a/23230280/16755079
-        *************************************************************/
-
-        getTouches(event) {
-            return event.touches ||             // browser API
-                    event.originalEvent.touches; // jQuery
-        },
-
-        // Handler for touchstart event
-        handleTouchStart(event) {
-            const firstTouch = this.getTouches(event)[0]
-            this.xDown = firstTouch.clientX
-            this.yDown = firstTouch.clientY
-            this.innerWidth = window.innerWidth
-        },
-
-        // Handler for touchmove event
-        handleTouchMove(event) {
-            this.touchEvent = event
-            const firstTouch = this.getTouches(event)[0]
-
-            // Record xMove for grade-bar css (see computed: cssVars)
-            this.xMove = firstTouch.clientX
-            this.yMove = firstTouch.clientY
-
-            this.touchMacro(event, 0, undefined, 
-            () => {
-                // Swapping movement flags
-                // console.log("right")
-                if (this.percent <= -1) {
-                    this.moveLeft = false
-                    this.moveRight = true
-                } else {
-                    this.moveLeft = false
-                    this.moveRight = false
-                }
-            }, 
-            undefined, 
-            () => {
-                // console.log("left")
-                if (this.percent >= 1) {
-                    this.moveLeft = true
-                    this.moveRight = false
-                } else {
-                    this.moveLeft = false
-                    this.moveRight = false
-                }
-            })
-        },
-
-        resetImagePos() {
-            /* reset values */
-            this.moveLeft = false
-            this.moveRight = false
-            this.xDown = null
-            this.yDown = null
-            this.xMove = null
-            this.yMove = null
-            this.touchEvent = null // important to clear touchmove event to avoid tapping causing submissions
-            this.percent = 0.0
-        },
-
-        // Handler for touchend event
-        handleTouchEnd(event) {
-            if (this.touchEvent != null) {
-                const touchList = this.touchEvent.touches ||
-                                        this.touchEvent.originalEvent.touches
-                if (touchList.length == 1) {
-                    // touchend event has an empty `touches` list, so we pass the touchmove event instead
-                    this.touchMacro(this.touchEvent, this.swipeDistance, () => {
-                        this.commenting = true
-                    }, () => {
-                        this.onClick('yes-cancer')
-                    }, () => {
-                        // this.onClick('maybe-cancer')
-                        this.commenting = false
-                    }, () => {
-                        this.onClick('no-cancer')
-                    })
-                } 
-            }
-
-            if (this.showImage) {
-                this.resetImagePos()
-            }
-        },
-
-        touchMacro(event, margin = 0, top = undefined, right = undefined, bottom = undefined, left = undefined) {
-            // Escape if the mouse isn't down or null event
-            if ( !this.xDown || !this.yDown || event === null) {
-                return
-            }
-
-            // Get the movement difference
-            const touches = this.getTouches(event)
-
-            const xDiff = this.xDown - touches[0].clientX
-            const yDiff = this.yDown - touches[0].clientY
-            
-            // this.percent = xDiff/(this.innerWidth*0.5)
-            this.percent = xDiff/(this.swipeDistance)
-            
-
-            // Interesting callbacks are not undefined and they are not empty functions
-            const interesting = {
-                top: top !== undefined && ''+top !== ''+(() => {}),
-                right: right !== undefined && ''+right !== ''+(() => {}),
-                bottom: bottom !== undefined && ''+bottom !== ''+(() => {}),
-                left: left !== undefined && ''+left !== ''+(() => {})
-            }
-            
-            // Basically, whichever axis is bigger, unless there is nothing to do on that axis
-            if (Math.abs(xDiff) > Math.abs(yDiff) && (interesting.right || interesting.left) || 
-                    !(interesting.top || interesting.bottom)) {                                      /*most significant*/
-                if ( xDiff > margin ) {
-                    /* right-to-left swipe */
-                    left()
-                } else if ( xDiff <= -margin ) {
-                    /* left-to-right swipe */
-                    right()
-                }
-            } else {
-                if ( yDiff > margin ) {
-                    /* bottom-to-top swipe */ 
-                    top()
-                } else if ( yDiff <= -margin ) { 
-                    /* top-to-bottom swipe */
-                    bottom()
-                }
-            }
         }
+    }
+}
+
+// Helper - Durstenfeld Shuffle
+// https://stackoverflow.com/a/12646864/3068136
+function shuffleArray(array) {
+    for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1))
+        const temp = array[i]
+        array[i] = array[j]
+        array[j] = temp
     }
 }
 </script>
@@ -486,9 +288,7 @@ export default {
     flex-direction: column;
     padding-top: $block-margin;
 }
-/* Grade Bars */
-$grade-bar-radius: 1rem;
-$grade-bar-speed: 200ms;
+
 $yes-cancer-color: #5A46B9;
 $no-cancer-color: #ff6184;
 
@@ -525,29 +325,6 @@ $no-cancer-color: #ff6184;
     }
 }
 
-.grade-bar {
-    /* flush with navbar and behind everything */
-    position: fixed;
-    bottom: 0;
-    height: calc(100vh - $navbar-height); /* fullscreen */ 
-    z-index: -1;
-
-    /* "no" on the left */
-    &.no {
-        left: 0;
-        width: calc(-1 * var(--x-diff, 0)); /* Come out opposite of a swipe */
-        background-color: $no-cancer-color;
-        border-top-right-radius: $grade-bar-radius;
-    }
-    /* "yes" on the right */
-    &.yes {
-        right: 0;
-        width: var(--x-diff, 0);
-        background-color: $yes-cancer-color;
-        border-top-left-radius: $grade-bar-radius;
-    }
-}
-
 /* Control image size + overlay */
 .prompt {
     margin: auto;
@@ -557,18 +334,13 @@ $no-cancer-color: #ff6184;
     width: 100%;
 
     @include for-size(mobile) {
-        padding: 0 $block-margin $block-margin;
+        padding: 0 $block-margin 0;
         max-width: 100%;
     }
 
     .controls {
         color: hsl(0deg, 0%, 29%);
-        width: 100%;
-        padding: 0 $block-margin;
-
-        .task-picker select {
-            font-weight: 600;
-        }
+        // width: 100%;
 
         @include for-size(mobile) {
             padding: 0 0;
@@ -579,83 +351,7 @@ $no-cancer-color: #ff6184;
             display: inline-block;
         }
     }
-
-    .image-container {
-        position: relative;
-        width: 100%;
-        // TODO: Figure out how to handle rectangular images and their ROIs
-        height: calc(50vh - $block-margin - $block-margin);
-        line-height: 0;
-        overflow: hidden;
-
-
-        transform: translate(var(--x-diff), calc(var(--y-diff) / -6)) rotate(calc( var(--rot-diff) * -12deg));
-
-        @include for-size(mobile) {
-            height: calc(100vw - $block-margin - $block-margin);
-        }
-
-        .zoom-box {
-            width: 100%;
-            height: 100%;
-            position: relative;
-
-            /** Image zooming */
-            transition-property: transform;
-            transition-duration: 0.5s;
-            transition-timing-function: ease-out;
-
-            &.zoom {
-                transform: scale(var(--zoom-scale));
-            }
-
-            /** Transitions for image container during swap */
-            &.swap-img-enter-active {
-                transition: all var(--img-trans) ease-in;
-            }
-            &.swap-img-leave-active {
-                transition: all var(--img-trans) ease-out;
-            }
-
-            &.swap-img-enter,
-            &.swap-img-leave-to {
-                opacity: 0;
-            }
-
-            
-
-            img {
-                object-fit: contain;
-                width: 100%;
-                height: 100%;
-            }
-    
-            /**
-            * ROI is a white box centered in the image
-            *
-            * Important for .roi to be `position: absolute` and parent `position: relative`
-            * That way the overlay will be centered on the image.
-            */
-            .roi {
-                position: absolute;
-                left: 0;
-                right: 0;
-                top: 0;
-                bottom: 0;
-    
-                // TODO: make this sizing dynamic
-                // ROI fallback
-                width: 14.05%;
-                height: 14.05%;
-                // ROI most accurate
-                width: calc(100% * var(--roi-ratio));
-                height: calc(100% * var(--roi-ratio));
-                margin: auto;
-                border: 1px solid white;
-                pointer-events: none;
-            }
-        }
-    }    
+ 
 }
 /* stuck to the bottom of the screen */
 .response-area {
@@ -733,7 +429,7 @@ $no-cancer-color: #ff6184;
             transition-timing-function: ease-out;
     
             &.shown {
-                height: 99px;
+                height: 70px;
                 opacity: 1;
             }
         }
@@ -755,6 +451,7 @@ $no-cancer-color: #ff6184;
     justify-content: space-around;
     flex-wrap: nowrap;
     width: 100%;
+    // margin-bottom: 0.75rem;
 
     .button {
         /* coloration for "yes" and "no" buttons to match grade bars */

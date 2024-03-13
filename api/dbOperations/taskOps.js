@@ -130,6 +130,37 @@ const taskOps = {
         LEFT JOIN overall ON tasks.id = overall.task_id
         WHERE tasks.investigator = ?;`
 
+
+// ```sql
+// SELECT 
+//     tasks.id, 
+//     tasks.short_name, 
+//     tasks.prompt, 
+//     tasks.chip_size, 
+//     tasks.fov_size, 
+//     tasks.zoom_scale,
+//     (image_counts.image_count + observer_counts.observer_count) AS total_count,
+//     image_counts.image_count AS image_count,
+//     observer_counts.observer_count AS observer_count,
+//     (COALESCE(image_counts.image_count, 0) + COALESCE(observer_counts.observer_count, 0)) / (tasks.total_images + COALESCE(image_counts.total_images, 0)) 
+// AS progress
+// FROM tasks
+// LEFT JOIN (
+//     SELECT task_id AS t_id, COUNT(DISTINCT image_id) AS total_images, COUNT(DISTINCT task_id) AS image_count
+//     FROM task_images
+//     INNER JOIN tasks ON tasks.id = task_images.task_id
+//     WHERE tasks.investigator = ?
+//     GROUP BY task_id
+// ) AS image_counts ON tasks.id = image_counts.t_id
+// LEFT JOIN (
+//     SELECT tasks.id, COUNT(DISTINCT observers.user_id) AS observer_count
+//     FROM tasks
+//     INNER JOIN observers ON observers.task_id = tasks.id
+//     WHERE tasks.investigator = ?
+//     GROUP BY tasks.id
+// ) AS observer_counts ON tasks.id = observer_counts.id;
+// ```
+
         const rows = await dbOps.select(query, [userId, userId, userId])
         return rows
     },
@@ -250,6 +281,25 @@ const taskOps = {
         const transaction = await dbOps.startTransaction()
         await transaction.query(deleteImagesForTask, [taskId])
         await Promise.all(imageIds.map((imageId) => transaction.query(addImageToTask, [taskId, imageId])))
+        await transaction.commit()
+    },
+
+    async getTaskGuide(taskId) {
+        const query = `SELECT
+              id as guideId, task_id as taskId, content
+            FROM guides
+            WHERE guides.task_id = ?`
+
+        const rows = await dbOps.select(query, [taskId])
+        return rows[0]
+    },
+
+    async setTaskGuide(taskId, HTMLContent) {
+        const deleteContent = `DELETE FROM guides WHERE task_id = ?`
+        const saveContent = `INSERT INTO guides (task_id, content) VALUES (?, ?)`
+        const transaction = await dbOps.startTransaction()
+        await transaction.query(deleteContent, [taskId])
+        await transaction.query(saveContent, [taskId, HTMLContent])
         await transaction.commit()
     }
 }
